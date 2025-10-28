@@ -1,0 +1,1111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stream-Table Join: Orders ⋈ Products</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        * {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+        
+        body {
+            background: #f5f5f5;
+            min-height: 100vh;
+            padding: 0.5rem;
+            margin: 0;
+        }
+        
+        .visualization-container {
+            background: white;
+            border-radius: 10px;
+            padding: 1rem;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .stream-event {
+            fill: #3273dc;
+            stroke: #2366d1;
+            stroke-width: 2;
+        }
+        
+        .hash-table-cell {
+            fill: #f5f5f5;
+            stroke: #dbdbdb;
+            stroke-width: 2;
+        }
+        
+        .hash-table-key {
+            font-weight: bold;
+            fill: #363636;
+        }
+        
+        .hash-table-value {
+            fill: #7a7a7a;
+            font-size: 12px;
+        }
+        
+        .probe-line {
+            stroke: #48c774;
+            stroke-width: 3;
+            stroke-dasharray: 5,5;
+            fill: none;
+        }
+        
+        .probe-line-no-match {
+            stroke: #f14668;
+            stroke-width: 3;
+            stroke-dasharray: 5,5;
+            fill: none;
+        }
+        
+        .match-indicator {
+            fill: #48c774;
+            opacity: 0;
+        }
+        
+        .no-match-indicator {
+            fill: #f14668;
+            opacity: 0;
+        }
+        
+        .enriched-event {
+            fill: #48c774;
+            stroke: #23d160;
+            stroke-width: 2;
+        }
+        
+        .unmatched-event {
+            fill: #f14668;
+            stroke: #f03a5f;
+            stroke-width: 2;
+        }
+        
+        .event-text {
+            text-shadow: 0 0 2px rgba(0,0,0,0.5);
+        }
+        
+        .label-text {
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            fill: #363636;
+            font-weight: 600;
+        }
+        
+        .title-text {
+            font-family: 'Inter', sans-serif;
+            font-size: 16px;
+            fill: #363636;
+            font-weight: 700;
+        }
+        
+        .legend-item {
+            font-size: 13px;
+        }
+        
+        svg {
+            border: 1px solid #dbdbdb;
+            border-radius: 6px;
+            background: #fafafa;
+        }
+        
+        .info-box {
+            background: #f9f9f9;
+            border-left: 4px solid #4a4a4a;
+            padding: 0.75rem;
+            margin-top: 1rem;
+            border-radius: 4px;
+        }
+        
+        .info-box p {
+            margin: 0;
+            font-size: 0.9rem;
+            color: #363636;
+        }
+        
+        /* Grayscale button styling */
+        .btn-gray {
+            background-color: #4a4a4a;
+            border-color: #4a4a4a;
+            color: white;
+        }
+        
+        .btn-gray:hover {
+            background-color: #363636;
+            border-color: #363636;
+            color: white;
+        }
+        
+        .btn-gray:active,
+        .btn-gray:focus {
+            background-color: #2a2a2a;
+            border-color: #2a2a2a;
+            color: white;
+        }
+        
+        /* Range slider styling */
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            height: 6px;
+            background: #dbdbdb;
+            border-radius: 3px;
+            outline: none;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            background: #4a4a4a;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        
+        input[type="range"]::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            background: #4a4a4a;
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb:hover {
+            background: #363636;
+        }
+        
+        input[type="range"]::-moz-range-thumb:hover {
+            background: #363636;
+        }
+        
+        .label.is-small {
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+    <div class="container is-fluid">
+        <div class="visualization-container">
+            <div class="content has-text-centered" style="margin-bottom: 0.4rem;">
+                <h1 class="title is-6" style="margin-bottom: 0.2rem; font-size: 0.95rem; color: #363636;">Stream-Table Join: Orders Stream (id, product_id, price, quantity) ⋈ Products Table (id → name, country)</h1>
+            </div>
+            
+            <div id="visualization" class="mt-1" style="margin-bottom: 0.4rem;"></div>
+            
+            <div class="field is-grouped is-grouped-centered mb-2" style="flex-wrap: wrap; gap: 1rem; align-items: center;">
+                <div class="field has-addons" style="margin-bottom: 0;">
+                    <p class="control">
+                        <button class="button is-small btn-gray" id="startBtn">
+                            <span class="icon is-small">▶️</span>
+                            <span>Start</span>
+                        </button>
+                    </p>
+                    <p class="control">
+                        <button class="button is-small btn-gray" id="resetBtn">
+                            <span class="icon is-small">🔄</span>
+                            <span>Reset</span>
+                        </button>
+                    </p>
+                </div>
+                
+                <div class="field" style="margin-bottom: 0;">
+                    <div class="control">
+                        <div class="select is-small">
+                            <select id="joinType" style="border-color: #4a4a4a; color: #363636;">
+                                <option value="left">LEFT JOIN (keep unmatched)</option>
+                                <option value="inner">INNER JOIN (discard unmatched)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="field" style="margin-bottom: 0; min-width: 200px;">
+                    <label class="label is-small" style="margin-bottom: 0.25rem; color: #363636;">Animation Speed: <span id="speedValue">1.0x</span></label>
+                    <div class="control">
+                        <input class="slider is-small is-fullwidth" id="speedSlider" type="range" min="0.5" max="2.5" step="0.1" value="1.0" style="width: 180px;">
+                    </div>
+                </div>
+                
+                <div class="field" style="margin-bottom: 0; min-width: 200px;">
+                    <label class="label is-small" style="margin-bottom: 0.25rem; color: #363636;">Throughput: <span id="throughputValue">1.25</span> events/sec</label>
+                    <div class="control">
+                        <input class="slider is-small is-fullwidth" id="throughputSlider" type="range" min="0.5" max="3.0" step="0.25" value="1.25" style="width: 180px;">
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        /*
+         * Schema:
+         * 
+         * CREATE STREAM orders (
+         *     id string,
+         *     product_id string,
+         *     price float64,
+         *     quantity uint32,
+         *     timestamp datetime64(3)
+         * );
+         * 
+         * CREATE MUTABLE STREAM products(
+         *     id string,
+         *     name string,
+         *     country string
+         * ) PRIMARY KEY id;
+         * 
+         * Join: orders.product_id = products.id
+         * Enrichment: orders get product name and country
+         */
+        
+        // Configuration
+        const width = 1150;
+        const height = 680;
+        const margin = { top: 30, right: 30, bottom: 30, left: 30 };
+        
+        // Hash table data - Products table
+        const hashTableData = [
+            { key: 'prod_1', value: 'Laptop | USA' },
+            { key: 'prod_3', value: 'Mouse | China' },
+            { key: 'prod_5', value: 'Keyboard | Japan' },
+            { key: 'prod_7', value: 'Monitor | Korea' }
+        ];
+        
+        // Stream event generator - Orders
+        let eventCounter = 0;
+        // Product IDs with higher match rate (~73%)
+        const possibleKeys = [
+            'prod_1', 'prod_1', 'prod_3', 'prod_3', 'prod_5', 'prod_5', 'prod_7', 'prod_7',  // matching products (repeated)
+            'prod_2', 'prod_4', 'prod_6'  // non-matching products
+        ];
+        
+        function generateStreamEvent() {
+            eventCounter++;
+            const randomKey = possibleKeys[Math.floor(Math.random() * possibleKeys.length)];
+            const price = (Math.random() * 900 + 100).toFixed(2); // Random price between 100-1000
+            const quantity = Math.floor(Math.random() * 5) + 1; // Quantity 1-5
+            return {
+                id: eventCounter,
+                orderId: `ord_${String(eventCounter).padStart(3, '0')}`,
+                key: randomKey,
+                data: `$${price} × ${quantity}`
+            };
+        }
+        
+        // SVG setup
+        const svg = d3.select('#visualization')
+            .append('svg')
+            .attr('width', width)
+            .attr('height', height);
+        
+        // Define groups for layering
+        const streamGroup = svg.append('g').attr('id', 'stream-layer');
+        const probeGroup = svg.append('g').attr('id', 'probe-layer');
+        const resultGroup = svg.append('g').attr('id', 'result-layer');
+        const hashTableGroup = svg.append('g').attr('id', 'hashtable-layer');
+        
+        // Layout parameters - VERTICAL HASH TABLE
+        const inputStreamX = 200;
+        const hashTableStartX = 500;
+        const hashTableCellWidth = 180;
+        const hashTableCellHeight = 70;
+        const hashTableStartY = 150;
+        const outputStreamX = 900;
+        
+        const inputStreamStartY = 110;
+        const inputStreamHeight = 450;
+        const outputStreamStartY = 110;
+        const outputStreamHeight = 450;
+        
+        // Draw input stream
+        svg.append('rect')
+            .attr('x', inputStreamX - 60)
+            .attr('y', inputStreamStartY)
+            .attr('width', 120)
+            .attr('height', inputStreamHeight)
+            .attr('fill', 'none')
+            .attr('stroke', '#3273dc')
+            .attr('stroke-width', 2)
+            .attr('stroke-dasharray', '10,5')
+            .attr('rx', 5);
+        
+        svg.append('text')
+            .attr('class', 'label-text')
+            .attr('x', inputStreamX)
+            .attr('y', inputStreamStartY - 30)
+            .attr('text-anchor', 'middle')
+            .attr('font-size', '15px')
+            .attr('font-weight', '700')
+            .text('Orders Stream');
+        
+        // Add schema fields
+        svg.append('text')
+            .attr('x', inputStreamX)
+            .attr('y', inputStreamStartY - 15)
+            .attr('text-anchor', 'middle')
+            .attr('font-size', '10px')
+            .attr('fill', '#7a7a7a')
+            .text('(id, product_id, price, quantity)');
+        
+        // Add entry indicator arrow with more space
+        svg.append('text')
+            .attr('x', inputStreamX)
+            .attr('y', inputStreamStartY - 50)
+            .attr('text-anchor', 'middle')
+            .attr('font-size', '20px')
+            .attr('fill', '#3273dc')
+            .text('↓');
+        
+        // Add "incoming" label
+        svg.append('text')
+            .attr('x', inputStreamX)
+            .attr('y', inputStreamStartY - 70)
+            .attr('text-anchor', 'middle')
+            .attr('font-size', '10px')
+            .attr('fill', '#7a7a7a')
+            .attr('font-style', 'italic')
+            .text('incoming orders');
+        
+        // Draw hash table title - VERTICAL
+        svg.append('text')
+            .attr('class', 'title-text')
+            .attr('x', hashTableStartX + hashTableCellWidth / 2)
+            .attr('y', hashTableStartY - 70)
+            .attr('text-anchor', 'middle')
+            .attr('font-size', '15px')
+            .attr('font-weight', '700')
+            .text('Products Table');
+        
+        // Draw hash table schema
+        svg.append('text')
+            .attr('x', hashTableStartX + hashTableCellWidth / 2)
+            .attr('y', hashTableStartY - 55)
+            .attr('text-anchor', 'middle')
+            .attr('font-size', '10px')
+            .attr('fill', '#7a7a7a')
+            .text('(id PRIMARY KEY, name, country)');
+        
+        // Draw hash table - VERTICAL STACKING
+        hashTableData.forEach((item, index) => {
+            const cellY = hashTableStartY + index * (hashTableCellHeight + 10);
+            
+            // Cell background
+            hashTableGroup.append('rect')
+                .attr('class', 'hash-table-cell')
+                .attr('x', hashTableStartX)
+                .attr('y', cellY)
+                .attr('width', hashTableCellWidth)
+                .attr('height', hashTableCellHeight)
+                .attr('rx', 4)
+                .attr('data-key', item.key)
+                .attr('data-index', index);
+            
+            // Key text
+            hashTableGroup.append('text')
+                .attr('class', 'hash-table-key')
+                .attr('x', hashTableStartX + hashTableCellWidth / 2)
+                .attr('y', cellY + 25)
+                .attr('text-anchor', 'middle')
+                .attr('font-size', '14px')
+                .text(item.key);
+            
+            // Separator line
+            hashTableGroup.append('line')
+                .attr('x1', hashTableStartX + 15)
+                .attr('y1', cellY + 35)
+                .attr('x2', hashTableStartX + hashTableCellWidth - 15)
+                .attr('y2', cellY + 35)
+                .attr('stroke', '#dbdbdb')
+                .attr('stroke-width', 1);
+            
+            // Value text
+            hashTableGroup.append('text')
+                .attr('class', 'hash-table-value')
+                .attr('x', hashTableStartX + hashTableCellWidth / 2)
+                .attr('y', cellY + 52)
+                .attr('text-anchor', 'middle')
+                .attr('font-size', '13px')
+                .text(item.value);
+        });
+        
+        // Draw output stream
+        svg.append('rect')
+            .attr('x', outputStreamX - 60)
+            .attr('y', outputStreamStartY)
+            .attr('width', 120)
+            .attr('height', outputStreamHeight)
+            .attr('fill', 'none')
+            .attr('stroke', '#48c774')
+            .attr('stroke-width', 2)
+            .attr('stroke-dasharray', '10,5')
+            .attr('rx', 5);
+        
+        svg.append('text')
+            .attr('class', 'label-text')
+            .attr('x', outputStreamX)
+            .attr('y', outputStreamStartY - 30)
+            .attr('text-anchor', 'middle')
+            .attr('font-size', '15px')
+            .attr('font-weight', '700')
+            .text('Enriched Orders');
+        
+        // Add schema fields
+        svg.append('text')
+            .attr('x', outputStreamX)
+            .attr('y', outputStreamStartY - 15)
+            .attr('text-anchor', 'middle')
+            .attr('font-size', '10px')
+            .attr('fill', '#7a7a7a')
+            .text('(id, product_id, price, quantity, name, country)');
+        
+        // Add exit indicator at bottom
+        svg.append('text')
+            .attr('x', outputStreamX)
+            .attr('y', outputStreamStartY + outputStreamHeight + 20)
+            .attr('text-anchor', 'middle')
+            .attr('font-size', '20px')
+            .attr('fill', '#48c774')
+            .text('↓');
+        
+        // Add "output" label
+        svg.append('text')
+            .attr('x', outputStreamX)
+            .attr('y', outputStreamStartY + outputStreamHeight + 35)
+            .attr('text-anchor', 'middle')
+            .attr('font-size', '10px')
+            .attr('fill', '#7a7a7a')
+            .attr('font-style', 'italic')
+            .text('to downstream');
+        
+        // Animation state
+        let isAnimating = false;
+        let animationInterval = null;
+        let animationSpeed = 1.0; // Speed multiplier (1.0 = normal, 2.0 = 2x faster)
+        let throughput = 1.25; // Events per second
+        
+        // Animate an event through the join process
+        function animateEvent(eventData) {
+            const joinType = document.getElementById('joinType').value;
+            
+            // Find matching hash table entry
+            const matchingEntry = hashTableData.find(entry => entry.key === eventData.key);
+            const matchingIndex = hashTableData.findIndex(entry => entry.key === eventData.key);
+            
+            // Calculate target position based on matching index
+            let targetY;
+            if (matchingIndex >= 0) {
+                // Align with the matching hash table row
+                targetY = hashTableStartY + matchingIndex * (hashTableCellHeight + 10) + hashTableCellHeight / 2;
+            } else {
+                // If no match, position at the end of hash table (after last row)
+                targetY = hashTableStartY + hashTableData.length * (hashTableCellHeight + 10) + hashTableCellHeight / 2;
+            }
+            
+            const startY = inputStreamStartY - 40;  // Start above the stream box
+            
+            // Create event group
+            const eventGroup = streamGroup.append('g')
+                .attr('transform', `translate(0, ${startY})`);
+            
+            // Draw event rectangle
+            const eventRect = eventGroup.append('rect')
+                .attr('class', 'stream-event')
+                .attr('x', inputStreamX - 45)
+                .attr('y', 0)
+                .attr('width', 90)
+                .attr('height', 60)
+                .attr('rx', 5);
+            
+            // Order ID text (top)
+            const eventOrderIdText = eventGroup.append('text')
+                .attr('class', 'event-text')
+                .attr('x', inputStreamX)
+                .attr('y', 14)
+                .attr('text-anchor', 'middle')
+                .attr('fill', 'white')
+                .attr('font-weight', '600')
+                .attr('font-size', '10px')
+                .text(eventData.orderId);
+            
+            // Product ID text (key)
+            const eventKeyText = eventGroup.append('text')
+                .attr('class', 'event-text')
+                .attr('x', inputStreamX)
+                .attr('y', 28)
+                .attr('text-anchor', 'middle')
+                .attr('fill', 'white')
+                .attr('font-weight', 'bold')
+                .attr('font-size', '13px')
+                .text(eventData.key);
+            
+            // Event data text (price/quantity)
+            const eventActionText = eventGroup.append('text')
+                .attr('class', 'event-text')
+                .attr('x', inputStreamX)
+                .attr('y', 43)
+                .attr('text-anchor', 'middle')
+                .attr('fill', 'white')
+                .attr('font-size', '10px')
+                .text(eventData.data);
+            
+            // TIMING: Define when the box reaches the target Y position
+            const REACH_TARGET_Y_TIME = 1200 / animationSpeed; // 800ms (first transition) + 400ms (second transition)
+            const PROBE_LINE_DELAY = 50 / animationSpeed; // Small delay after reaching position for visual clarity
+            const PROBE_LINE_START_TIME = REACH_TARGET_Y_TIME + PROBE_LINE_DELAY;
+            
+            // Animate down the input stream to the target row
+            // First, flow INTO the stream box from above
+            eventGroup.transition()
+                .duration(800 / animationSpeed)
+                .ease(d3.easeQuadIn)
+                .attr('transform', `translate(0, ${inputStreamStartY + 60})`)
+                .transition()
+                .duration(400 / animationSpeed)
+                .ease(d3.easeQuadInOut)
+                .attr('transform', `translate(0, ${targetY - 30})`);
+            
+            if (matchingEntry) {
+                // MATCH FOUND
+                const hashTableCellY = hashTableStartY + matchingIndex * (hashTableCellHeight + 10);
+                
+                // Highlight the matching hash table cell (when probe line hits it)
+                const matchedCell = hashTableGroup.selectAll('.hash-table-cell')
+                    .filter(function() {
+                        return d3.select(this).attr('data-key') === eventData.key;
+                    });
+                
+                matchedCell.transition()
+                    .delay(PROBE_LINE_START_TIME + 400 / animationSpeed) // After probe line animation
+                    .duration(200 / animationSpeed)
+                    .style('fill', '#d4edda')
+                    .transition()
+                    .duration(800 / animationSpeed)
+                    .style('fill', '#f5f5f5');
+                
+                // Draw probe line - appears EXACTLY when event reaches target Y position
+                const probeLine = probeGroup.append('path')
+                    .attr('class', 'probe-line')
+                    .attr('d', `M ${inputStreamX + 45} ${targetY} L ${hashTableStartX} ${targetY}`)
+                    .attr('stroke-dashoffset', hashTableStartX - inputStreamX - 45)
+                    .style('opacity', 0);
+                
+                probeLine.transition()
+                    .delay(PROBE_LINE_START_TIME)
+                    .duration(0)
+                    .style('opacity', 1)
+                    .transition()
+                    .duration(400 / animationSpeed)
+                    .attr('stroke-dashoffset', 0);
+                
+                // Move event horizontally to hash table position (still blue)
+                // Starts after probe line appears and animates
+                eventGroup.transition()
+                    .delay(PROBE_LINE_START_TIME + 400 / animationSpeed)
+                    .duration(400 / animationSpeed)
+                    .ease(d3.easeQuadInOut)
+                    .attr('transform', `translate(${hashTableStartX - inputStreamX - 90}, ${targetY - 30})`);
+                
+                probeLine.transition()
+                    .delay(PROBE_LINE_START_TIME + 1200 / animationSpeed)
+                    .duration(300 / animationSpeed)
+                    .style('opacity', 0)
+                    .remove();
+                
+                // Flash match indicator at hash table cell
+                const matchFlash = svg.append('circle')
+                    .attr('class', 'match-indicator')
+                    .attr('cx', hashTableStartX + hashTableCellWidth / 2)
+                    .attr('cy', targetY)
+                    .attr('r', 30);
+                
+                matchFlash.transition()
+                    .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                    .duration(200 / animationSpeed)
+                    .style('opacity', 0.6)
+                    .transition()
+                    .duration(200 / animationSpeed)
+                    .style('opacity', 0)
+                    .remove();
+                
+                // Add checkmark indicator
+                const checkmark = svg.append('text')
+                    .attr('x', hashTableStartX + hashTableCellWidth + 20)
+                    .attr('y', targetY + 7)
+                    .attr('text-anchor', 'middle')
+                    .attr('font-size', '24px')
+                    .style('opacity', 0)
+                    .attr('fill', '#48c774')
+                    .attr('font-weight', 'bold')
+                    .text('✓');
+                
+                checkmark.transition()
+                    .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                    .duration(200 / animationSpeed)
+                    .style('opacity', 1);
+                
+                // TRANSFORM TO ENRICHED - happens at hash table X position
+                eventRect.transition()
+                    .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                    .duration(300 / animationSpeed)
+                    .attr('class', 'enriched-event')
+                    .attr('width', 95)
+                    .attr('height', 85);
+                
+                eventOrderIdText.transition()
+                    .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                    .duration(300 / animationSpeed)
+                    .attr('y', 12)
+                    .attr('fill', '#1a5928')
+                    .attr('font-size', '9px');
+                
+                eventKeyText.transition()
+                    .delay(PROBE_LINE_START_TIME + 700 / animationSpeed)
+                    .duration(300 / animationSpeed)
+                    .attr('y', 24)
+                    .attr('fill', '#1a5928')
+                    .attr('font-size', '11px');
+                
+                eventActionText.transition()
+                    .delay(PROBE_LINE_START_TIME + 700 / animationSpeed)
+                    .duration(300 / animationSpeed)
+                    .attr('y', 36)
+                    .attr('fill', '#1a5928')
+                    .text(`${eventData.data}`)
+                    .attr('font-size', '8px');
+                
+                const separator = eventGroup.append('line')
+                    .attr('x1', inputStreamX - 44)
+                    .attr('y1', 43)
+                    .attr('x2', inputStreamX + 44)
+                    .attr('y2', 43)
+                    .attr('stroke', '#1a5928')
+                    .attr('stroke-width', 1)
+                    .style('opacity', 0);
+                
+                separator.transition()
+                    .delay(PROBE_LINE_START_TIME + 700 / animationSpeed)
+                    .duration(300 / animationSpeed)
+                    .style('opacity', 0.4);
+                
+                const enrichedText = eventGroup.append('text')
+                    .attr('x', inputStreamX)
+                    .attr('y', 56)
+                    .attr('text-anchor', 'middle')
+                    .attr('fill', '#1a5928')
+                    .attr('font-size', '9px')
+                    .attr('font-weight', 'bold')
+                    .style('opacity', 0)
+                    .text(`${matchingEntry.value}`);
+                
+                enrichedText.transition()
+                    .delay(PROBE_LINE_START_TIME + 700 / animationSpeed)
+                    .duration(300 / animationSpeed)
+                    .style('opacity', 1);
+                
+                const enrichedLabel = eventGroup.append('text')
+                    .attr('x', inputStreamX)
+                    .attr('y', 68)
+                    .attr('text-anchor', 'middle')
+                    .attr('fill', '#1a5928')
+                    .attr('font-size', '7px')
+                    .attr('font-style', 'italic')
+                    .style('opacity', 0)
+                    .text('✓ product info');
+                
+                enrichedLabel.transition()
+                    .delay(PROBE_LINE_START_TIME + 700 / animationSpeed)
+                    .duration(300 / animationSpeed)
+                    .style('opacity', 0.8);
+                
+                // Move to output stream
+                eventGroup.transition()
+                    .delay(PROBE_LINE_START_TIME + 1400 / animationSpeed)
+                    .duration(850 / animationSpeed)
+                    .ease(d3.easeQuadInOut)
+                    .attr('transform', `translate(${outputStreamX - inputStreamX}, ${targetY - 30})`);
+                
+                checkmark.transition()
+                    .delay(PROBE_LINE_START_TIME + 1400 / animationSpeed)
+                    .duration(850 / animationSpeed)
+                    .attr('x', outputStreamX - 70)
+                    .attr('y', targetY + 7)
+                    .ease(d3.easeQuadInOut);
+                
+                // Continue flowing down
+                eventGroup.transition()
+                    .delay(PROBE_LINE_START_TIME + 2250 / animationSpeed)
+                    .duration(1300 / animationSpeed)
+                    .ease(d3.easeLinear)
+                    .attr('transform', `translate(${outputStreamX - inputStreamX}, ${outputStreamStartY + outputStreamHeight - 40})`)
+                    .style('opacity', 0.3);
+                
+                checkmark.transition()
+                    .delay(PROBE_LINE_START_TIME + 2250 / animationSpeed)
+                    .duration(1300 / animationSpeed)
+                    .ease(d3.easeLinear)
+                    .attr('y', outputStreamStartY + outputStreamHeight - 33)
+                    .style('opacity', 0);
+                
+                // Remove after animation
+                eventGroup.transition()
+                    .delay(PROBE_LINE_START_TIME + 3550 / animationSpeed)
+                    .remove();
+                
+                checkmark.transition()
+                    .delay(PROBE_LINE_START_TIME + 3550 / animationSpeed)
+                    .remove();
+                
+            } else {
+                // NO MATCH FOUND
+                
+                if (joinType === 'inner') {
+                    // INNER JOIN - discard the event
+                    
+                    // Draw probe line EXACTLY when event reaches target Y position
+                    const probeLineNoMatch = probeGroup.append('path')
+                        .attr('class', 'probe-line-no-match')
+                        .attr('d', `M ${inputStreamX + 45} ${targetY} L ${hashTableStartX - 20} ${targetY}`)
+                        .attr('stroke-dashoffset', hashTableStartX - 20 - inputStreamX - 45)
+                        .style('opacity', 0);
+                    
+                    probeLineNoMatch.transition()
+                        .delay(PROBE_LINE_START_TIME)
+                        .duration(0)
+                        .style('opacity', 1)
+                        .transition()
+                        .duration(400 / animationSpeed)
+                        .attr('stroke-dashoffset', 0);
+                    
+                    // Move event horizontally toward hash table (still blue)
+                    eventGroup.transition()
+                        .delay(PROBE_LINE_START_TIME + 400 / animationSpeed)
+                        .duration(400 / animationSpeed)
+                        .ease(d3.easeQuadInOut)
+                        .attr('transform', `translate(${hashTableStartX - inputStreamX - 110}, ${targetY - 30})`);
+                    
+                    probeLineNoMatch.transition()
+                        .delay(PROBE_LINE_START_TIME + 1200 / animationSpeed)
+                        .duration(300 / animationSpeed)
+                        .style('opacity', 0)
+                        .remove();
+                    
+                    // Flash no-match indicator
+                    const noMatchFlash = svg.append('circle')
+                        .attr('class', 'no-match-indicator')
+                        .attr('cx', hashTableStartX - 20)
+                        .attr('cy', targetY)
+                        .attr('r', 30);
+                    
+                    noMatchFlash.transition()
+                        .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                        .duration(200 / animationSpeed)
+                        .style('opacity', 0.6)
+                        .transition()
+                        .duration(200 / animationSpeed)
+                        .style('opacity', 0)
+                        .remove();
+                    
+                    // Add X indicator
+                    const discardIcon = svg.append('text')
+                        .attr('x', hashTableStartX - 20)
+                        .attr('y', targetY + 50)
+                        .attr('text-anchor', 'middle')
+                        .attr('font-size', '24px')
+                        .style('opacity', 0)
+                        .attr('fill', '#f14668')
+                        .attr('font-weight', 'bold')
+                        .text('✗');
+                    
+                    discardIcon.transition()
+                        .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                        .duration(200 / animationSpeed)
+                        .style('opacity', 1);
+                    
+                    // Add "DISCARDED" label
+                    const discardLabel = svg.append('text')
+                        .attr('x', hashTableStartX - 20)
+                        .attr('y', targetY + 70)
+                        .attr('text-anchor', 'middle')
+                        .attr('font-size', '11px')
+                        .attr('font-weight', 'bold')
+                        .style('opacity', 0)
+                        .attr('fill', '#f14668')
+                        .text('DISCARDED');
+                    
+                    discardLabel.transition()
+                        .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                        .duration(200 / animationSpeed)
+                        .style('opacity', 1);
+                    
+                    // Fade out the event
+                    eventGroup.transition()
+                        .delay(PROBE_LINE_START_TIME + 1500 / animationSpeed)
+                        .duration(500 / animationSpeed)
+                        .style('opacity', 0)
+                        .remove();
+                    
+                    discardIcon.transition()
+                        .delay(PROBE_LINE_START_TIME + 2000 / animationSpeed)
+                        .duration(500 / animationSpeed)
+                        .style('opacity', 0)
+                        .remove();
+                    
+                    discardLabel.transition()
+                        .delay(PROBE_LINE_START_TIME + 2000 / animationSpeed)
+                        .duration(500 / animationSpeed)
+                        .style('opacity', 0)
+                        .remove();
+                        
+                } else {
+                    // LEFT JOIN - keep with null values
+                    
+                    // Draw probe line EXACTLY when event reaches target Y position
+                    const probeLineNoMatch = probeGroup.append('path')
+                        .attr('class', 'probe-line-no-match')
+                        .attr('d', `M ${inputStreamX + 45} ${targetY} L ${hashTableStartX - 20} ${targetY}`)
+                        .attr('stroke-dashoffset', hashTableStartX - 20 - inputStreamX - 45)
+                        .style('opacity', 0);
+                    
+                    probeLineNoMatch.transition()
+                        .delay(PROBE_LINE_START_TIME)
+                        .duration(0)
+                        .style('opacity', 1)
+                        .transition()
+                        .duration(400 / animationSpeed)
+                        .attr('stroke-dashoffset', 0);
+                    
+                    // Move event horizontally toward hash table (still blue)
+                    eventGroup.transition()
+                        .delay(PROBE_LINE_START_TIME + 400 / animationSpeed)
+                        .duration(400 / animationSpeed)
+                        .ease(d3.easeQuadInOut)
+                        .attr('transform', `translate(${hashTableStartX - inputStreamX - 110}, ${targetY - 30})`);
+                    
+                    probeLineNoMatch.transition()
+                        .delay(PROBE_LINE_START_TIME + 1200 / animationSpeed)
+                        .duration(300 / animationSpeed)
+                        .style('opacity', 0)
+                        .remove();
+                    
+                    // Flash no-match indicator
+                    const noMatchFlash = svg.append('circle')
+                        .attr('class', 'no-match-indicator')
+                        .attr('cx', hashTableStartX - 20)
+                        .attr('cy', targetY)
+                        .attr('r', 30);
+                    
+                    noMatchFlash.transition()
+                        .delay(PROBE_LINE_START_TIME + 650 / animationSpeed)
+                        .duration(200 / animationSpeed)
+                        .style('opacity', 0.6)
+                        .transition()
+                        .duration(200 / animationSpeed)
+                        .style('opacity', 0)
+                        .remove();
+                    
+                    // Add X indicator
+                    const noMatchIcon = svg.append('text')
+                        .attr('x', hashTableStartX + hashTableCellWidth + 20)
+                        .attr('y', targetY + 7)
+                        .attr('text-anchor', 'middle')
+                        .attr('font-size', '24px')
+                        .style('opacity', 0)
+                        .attr('fill', '#f14668')
+                        .attr('font-weight', 'bold')
+                        .text('✗');
+                    
+                    noMatchIcon.transition()
+                        .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                        .duration(200 / animationSpeed)
+                        .style('opacity', 1);
+                    
+                    // TRANSFORM TO UNMATCHED
+                    eventRect.transition()
+                        .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                        .duration(300 / animationSpeed)
+                        .attr('class', 'unmatched-event')
+                        .attr('width', 95)
+                        .attr('height', 75);
+                    
+                    eventOrderIdText.transition()
+                        .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                        .duration(300 / animationSpeed)
+                        .attr('y', 12)
+                        .attr('fill', '#6b1a1a')
+                        .attr('font-size', '9px');
+                    
+                    eventKeyText.transition()
+                        .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                        .duration(300 / animationSpeed)
+                        .attr('y', 24)
+                        .attr('fill', '#6b1a1a')
+                        .attr('font-size', '11px');
+                    
+                    eventActionText.transition()
+                        .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                        .duration(300 / animationSpeed)
+                        .attr('y', 36)
+                        .attr('fill', '#6b1a1a')
+                        .text(`${eventData.data}`)
+                        .attr('font-size', '8px');
+                    
+                    const separatorUnmatched = eventGroup.append('line')
+                        .attr('x1', inputStreamX - 44)
+                        .attr('y1', 43)
+                        .attr('x2', inputStreamX + 44)
+                        .attr('y2', 43)
+                        .attr('stroke', '#6b1a1a')
+                        .attr('stroke-width', 0.8)
+                        .style('opacity', 0);
+                    
+                    separatorUnmatched.transition()
+                        .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                        .duration(300 / animationSpeed)
+                        .style('opacity', 0.4);
+                    
+                    const nullValueText = eventGroup.append('text')
+                        .attr('x', inputStreamX)
+                        .attr('y', 56)
+                        .attr('text-anchor', 'middle')
+                        .attr('fill', '#6b1a1a')
+                        .attr('font-size', '8px')
+                        .attr('font-weight', 'bold')
+                        .style('opacity', 0)
+                        .text('product: null');
+                    
+                    nullValueText.transition()
+                        .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                        .duration(300 / animationSpeed)
+                        .style('opacity', 1);
+                    
+                    const unmatchedLabelText = eventGroup.append('text')
+                        .attr('x', inputStreamX)
+                        .attr('y', 66)
+                        .attr('text-anchor', 'middle')
+                        .attr('fill', '#6b1a1a')
+                        .attr('font-size', '7px')
+                        .attr('font-style', 'italic')
+                        .style('opacity', 0)
+                        .text('✗ not found');
+                    
+                    unmatchedLabelText.transition()
+                        .delay(PROBE_LINE_START_TIME + 800 / animationSpeed)
+                        .duration(300 / animationSpeed)
+                        .style('opacity', 0.9);
+                    
+                    // Move to output stream
+                    eventGroup.transition()
+                        .delay(PROBE_LINE_START_TIME + 1400 / animationSpeed)
+                        .duration(850 / animationSpeed)
+                        .ease(d3.easeQuadInOut)
+                        .attr('transform', `translate(${outputStreamX - inputStreamX}, ${targetY - 30})`);
+                    
+                    noMatchIcon.transition()
+                        .delay(PROBE_LINE_START_TIME + 1400 / animationSpeed)
+                        .duration(850 / animationSpeed)
+                        .attr('x', outputStreamX - 70)
+                        .attr('y', targetY + 7)
+                        .ease(d3.easeQuadInOut);
+                    
+                    // Continue flowing down
+                    eventGroup.transition()
+                        .delay(PROBE_LINE_START_TIME + 2250 / animationSpeed)
+                        .duration(1300 / animationSpeed)
+                        .ease(d3.easeLinear)
+                        .attr('transform', `translate(${outputStreamX - inputStreamX}, ${outputStreamStartY + outputStreamHeight - 40})`)
+                        .style('opacity', 0.3);
+                    
+                    noMatchIcon.transition()
+                        .delay(PROBE_LINE_START_TIME + 2250 / animationSpeed)
+                        .duration(1300 / animationSpeed)
+                        .ease(d3.easeLinear)
+                        .attr('y', outputStreamStartY + outputStreamHeight - 33)
+                        .style('opacity', 0);
+                    
+                    // Remove after animation
+                    eventGroup.transition()
+                        .delay(PROBE_LINE_START_TIME + 3550 / animationSpeed)
+                        .remove();
+                    
+                    noMatchIcon.transition()
+                        .delay(PROBE_LINE_START_TIME + 3550 / animationSpeed)
+                        .remove();
+                }
+            }
+        }
+        
+        // Start continuous animation
+        function startAnimation() {
+            if (isAnimating) {
+                // If already animating, restart with new settings
+                pauseAnimation();
+            }
+            isAnimating = true;
+            
+            // Calculate interval from throughput (events per second)
+            const intervalMs = 1000 / throughput;
+            
+            // Generate events at intervals
+            animationInterval = setInterval(() => {
+                if (isAnimating) {
+                    const event = generateStreamEvent();
+                    animateEvent(event);
+                }
+            }, intervalMs);
+        }
+        
+        // Pause animation
+        function pauseAnimation() {
+            isAnimating = false;
+            if (animationInterval) {
+                clearInterval(animationInterval);
+                animationInterval = null;
+            }
+        }
+        
+        // Reset animation
+        function resetAnimation() {
+            pauseAnimation();
+            eventCounter = 0;
+            streamGroup.selectAll('*').remove();
+            probeGroup.selectAll('*').remove();
+            resultGroup.selectAll('*').remove();
+            
+            // Reset hash table cell colors
+            hashTableGroup.selectAll('.hash-table-cell')
+                .style('fill', '#f5f5f5');
+        }
+        
+        // Button handlers
+        document.getElementById('startBtn').addEventListener('click', startAnimation);
+        document.getElementById('resetBtn').addEventListener('click', resetAnimation);
+        
+        // Speed slider handler
+        document.getElementById('speedSlider').addEventListener('input', function(e) {
+            animationSpeed = parseFloat(e.target.value);
+            document.getElementById('speedValue').textContent = animationSpeed.toFixed(1) + 'x';
+        });
+        
+        // Throughput slider handler
+        document.getElementById('throughputSlider').addEventListener('input', function(e) {
+            throughput = parseFloat(e.target.value);
+            document.getElementById('throughputValue').textContent = throughput.toFixed(2);
+            
+            // Restart animation with new throughput if currently running
+            if (isAnimating) {
+                startAnimation();
+            }
+        });
+    </script>
+</body>
+</html>
